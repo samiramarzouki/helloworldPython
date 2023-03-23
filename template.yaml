@@ -1,0 +1,669 @@
+apiVersion: v1
+kind: Template
+metadata:
+  creationTimestamp: null
+  name: multiservice-template
+objects:
+- apiVersion: v1
+  stringData:
+    database-name: ${DB_NAME}
+    database-password: ${DB_PASS}
+    database-root-password: ${DB_ROOT}
+    database-user: ${DB_USER}
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+      template.openshift.io/expose-root_password: '{.data[''database-root-password'']}'
+      template.openshift.io/expose-username: '{.data[''database-user'']}'
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-mariadb
+  type: Opaque
+- apiVersion: v1
+  stringData:
+    database-admin-password: ${DB_ROOT}
+    database-name: ${DB_NAME}
+    database-password: ${DB_PASS}
+    database-user: ${DB_USER}
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-admin_password: '{.data[''database-admin-password'']}'
+      template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+      template.openshift.io/expose-username: '{.data[''database-user'']}'
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-mongodb
+  type: Opaque
+- apiVersion: v1
+  stringData:
+    database-name: ${DB_NAME}
+    database-password: ${DB_PASS}
+    database-user: ${DB_USER}
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-database_name: '{.data[''database-name'']}'
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+      template.openshift.io/expose-username: '{.data[''database-user'']}'
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-postgresql
+  type: Opaque
+- apiVersion: v1
+  stringData:
+    database-password: ${DB_PASS}
+  kind: Secret
+  metadata:
+    annotations:
+      template.openshift.io/expose-password: '{.data[''database-password'']}'
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-redis
+  type: Opaque
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    nodeSelector: null
+    output:
+      to:
+        kind: ImageStreamTag
+        name: ${NAME}:latest
+    postCommit: {}
+    resources: {}
+    runPolicy: Serial
+    source:
+      git:
+        ref: master
+        uri: https://github.com/arska/python-helloworld
+      type: Git
+    strategy:
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: python:3.5
+          namespace: openshift
+      type: Source
+    triggers:
+    - imageChange: {}
+      type: ImageChange
+    - type: ConfigChange
+    - generic:
+        secret: ${WEBHOOK_SECRET}
+      type: Generic
+    - github:
+        secret: ${GITHUB_SECRET}
+      type: GitHub
+- apiVersion: v1
+  kind: ImageStream
+  metadata:
+    creationTimestamp: null
+    generation: 1
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    lookupPolicy:
+      local: false
+    tags:
+    - annotations: null
+      from:
+        kind: DockerImage
+        name: ${NAME}:latest
+      generation: null
+      importPolicy: {}
+      name: latest
+      referencePolicy:
+        type: ""
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    creationTimestamp: null
+    generation: 1
+    labels:
+      app: ${NAME}
+    name: ${NAME}-mariadb
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}-mariadb
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: ${NAME}-mariadb
+      spec:
+        containers:
+        - env:
+          - name: MYSQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}-mariadb
+          - name: MYSQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-mariadb
+          - name: MYSQL_ROOT_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-root-password
+                name: ${NAME}-mariadb
+          - name: MYSQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: ${NAME}-mariadb
+          image: registry.access.redhat.com/rhscl/mariadb-101-rhel7@sha256:c410c29beea225ee5302714ae2df3d145b3b9e6065202f53b71c68e5f17699ed
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 3306
+            timeoutSeconds: 1
+          name: ${NAME}-mariadb
+          ports:
+          - containerPort: 3306
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - MYSQL_PWD="$MYSQL_PASSWORD" mysql -h 127.0.0.1 -u $MYSQL_USER -D $MYSQL_DATABASE
+                -e 'SELECT 1'
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 200Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/mysql/data
+            name: ${NAME}-mariadb-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: ${NAME}-mariadb-data
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}-mariadb
+        from:
+          kind: ImageStreamTag
+          name: mariadb:10.1
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      openshift.io/generated-by: OpenShiftWebConsole
+    creationTimestamp: null
+    generation: 1
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    replicas: 1
+    selector:
+      deploymentconfig: ${NAME}
+    strategy:
+      activeDeadlineSeconds: 21600
+      resources: {}
+      rollingParams:
+        intervalSeconds: 1
+        maxSurge: 25%
+        maxUnavailable: 25%
+        timeoutSeconds: 600
+        updatePeriodSeconds: 1
+      type: Rolling
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: ${NAME}
+          deploymentconfig: ${NAME}
+      spec:
+        containers:
+        - env:
+          - name: MARIADB_HOST
+            value: ${NAME}-mariadb
+          - name: POSTGRES_HOST
+            value: ${NAME}-postgresql
+          - name: REDIS_HOST
+            value: ${NAME}-redis
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-redis
+          - name: MARIADB_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-mariadb
+          - name: MARIADB_USERNAME
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}-mariadb
+          - name: MARIADB_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: ${NAME}-mariadb
+          - name: POSTGRES_USERNAME
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}-postgresql
+          - name: POSTGRES_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-postgresql
+          - name: POSTGRES_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: ${NAME}-postgresql
+          image: ${NAME}:latest
+          imagePullPolicy: Always
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          name: ${NAME}
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              cpu: 100m
+              memory: 100Mi
+            requests:
+              cpu: 50m
+              memory: 50Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}
+        from:
+          kind: ImageStreamTag
+          name: ${NAME}:latest
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    creationTimestamp: null
+    generation: 1
+    labels:
+      app: ${NAME}
+    name: ${NAME}-postgresql
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}-postgresql
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: ${NAME}-postgresql
+      spec:
+        containers:
+        - env:
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                key: database-user
+                name: ${NAME}-postgresql
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-postgresql
+          - name: POSTGRESQL_DATABASE
+            valueFrom:
+              secretKeyRef:
+                key: database-name
+                name: ${NAME}-postgresql
+          image: registry.access.redhat.com/rhscl/postgresql-95-rhel7@sha256:7df10257f6ee5d33b9affe7e6cfe964b9786a5646f0109d456abdbc95cfc3274
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 5432
+            timeoutSeconds: 1
+          name: ${NAME}-postgresql
+          ports:
+          - containerPort: 5432
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - psql -h 127.0.0.1 -U $POSTGRESQL_USER -q -d $POSTGRESQL_DATABASE -c
+                'SELECT 1'
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 200Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: ${NAME}-postgresql-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: ${NAME}-postgresql-data
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}-postgresql
+        from:
+          kind: ImageStreamTag
+          name: postgresql:9.5
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    annotations:
+      template.alpha.openshift.io/wait-for-ready: "true"
+    creationTimestamp: null
+    generation: 1
+    labels:
+      app: ${NAME}
+    name: ${NAME}-redis
+  spec:
+    replicas: 1
+    selector:
+      name: ${NAME}-redis
+    strategy:
+      activeDeadlineSeconds: 21600
+      recreateParams:
+        timeoutSeconds: 600
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          name: ${NAME}-redis
+      spec:
+        containers:
+        - env:
+          - name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                key: database-password
+                name: ${NAME}-redis
+          image: registry.access.redhat.com/rhscl/redis-32-rhel7@sha256:78bb19dfc4822dc064ed53c64909aa8c3988a607ff7956d181b2cab67b6d073a
+          imagePullPolicy: IfNotPresent
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            successThreshold: 1
+            tcpSocket:
+              port: 6379
+            timeoutSeconds: 1
+          name: ${NAME}-redis
+          ports:
+          - containerPort: 6379
+            protocol: TCP
+          readinessProbe:
+            exec:
+              command:
+              - /bin/sh
+              - -i
+              - -c
+              - test "$(redis-cli -h 127.0.0.1 -a $REDIS_PASSWORD ping)" == "PONG"
+            failureThreshold: 3
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            limits:
+              memory: 200Mi
+          securityContext:
+            capabilities: {}
+            privileged: false
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /var/lib/redis/data
+            name: ${NAME}-redis-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - emptyDir: {}
+          name: ${NAME}-redis-data
+    test: false
+    triggers:
+    - imageChangeParams:
+        automatic: true
+        containerNames:
+        - ${NAME}-redis
+        from:
+          kind: ImageStreamTag
+          name: redis:3.2
+          namespace: openshift
+      type: ImageChange
+    - type: ConfigChange
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: mysql://{.spec.clusterIP}:{.spec.ports[?(.name=="mariadb")].port}
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-mariadb
+  spec:
+    ports:
+    - name: ${NAME}-mariadb
+      port: 3306
+      protocol: TCP
+      targetPort: 3306
+    selector:
+      name: ${NAME}-mariadb
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      openshift.io/generated-by: OpenShiftWebConsole
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    ports:
+    - name: 8080-tcp
+      port: 8080
+      protocol: TCP
+      targetPort: 8080
+    selector:
+      deploymentconfig: ${NAME}
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: postgres://{.spec.clusterIP}:{.spec.ports[?(.name=="postgresql")].port}
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-postgresql
+  spec:
+    ports:
+    - name: ${NAME}-postgresql
+      port: 5432
+      protocol: TCP
+      targetPort: 5432
+    selector:
+      name: ${NAME}-postgresql
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    annotations:
+      template.openshift.io/expose-uri: redis://{.spec.clusterIP}:{.spec.ports[?(.name=="redis")].port}
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}-redis
+  spec:
+    ports:
+    - name: ${NAME}-redis
+      port: 6379
+      protocol: TCP
+      targetPort: 6379
+    selector:
+      name: ${NAME}-redis
+    sessionAffinity: None
+    type: ClusterIP
+- apiVersion: v1
+  kind: Route
+  metadata:
+    annotations:
+      openshift.io/generated-by: OpenShiftWebConsole
+      openshift.io/host.generated: "true"
+    creationTimestamp: null
+    labels:
+      app: ${NAME}
+    name: ${NAME}
+  spec:
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: ${NAME}
+      weight: 100
+    wildcardPolicy: None
+parameters:
+  - name: NAME
+    description: Name and prefix of this application instance
+    required: true
+  - name: GITHUB_SECRET
+    description: A secret string used to configure the GitHub webhook
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+  - name: WEBHOOK_SECRET
+    description: A secret string used to configure the Generic webhook
+    generate: expression
+    from: "[a-zA-Z0-9]{40}"
+  - name: DB_USER
+    description: database user
+    generate: expression
+    from: "user[a-zA-Z0-9]{40}"
+  - name: DB_PASS
+    description: database password
+    generate: expression
+    from: "pass[a-zA-Z0-9]{40}"
+  - name: DB_NAME
+    description: database name
+    generate: expression
+    from: "db[a-zA-Z0-9]{40}"
+  - name: DB_ROOT
+    description: database root password
+    generate: expression
+    from: "root[a-zA-Z0-9]{40}"
+

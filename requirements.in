@@ -1,0 +1,4 @@
+flask
+pymysql
+psycopg2-binary
+redis
