@@ -31,7 +31,7 @@ USER 1001
 CMD [ "python", "app.py" ]
 
 # expose this TCP-port
-EXPOSE 8080
+EXPOSE 8081
 
 # make this path persistent between versions of the container - not needed in this example
 # VOLUME /usr/src/app/mypersistentdatavolume/
